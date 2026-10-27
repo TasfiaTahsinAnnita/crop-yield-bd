@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Bangladesh Crop Yield Prediction
 
 A local research prototype with a PHP website and a persistent FastAPI service. The backend uses the supplied CSV and the TabFM and TabPFN APIs already used by `crop-yield.ipynb`. It computes live metrics from actual held-out predictions. A model that is not installed, licensed, or loadable is reported as unavailable; there are no fallback models or sample scores.
@@ -105,3 +106,6 @@ Metrics are for one fixed holdout, not a repeated-split mean or cross-validation
 ## Current verification and limitations
 
 The supplied notebook remains unchanged. The service's held-out model metrics and predictions are only produced when the official model packages and required checkpoint access are configured. This machine did not have TabFM, TabPFN, or FastAPI installed at the time the project was audited, so live model scores cannot be claimed until those dependencies and model access are set up and the service is run. The current backend records initialization failures independently. CUDA startup fallback is not automatic; select a CPU-only PyTorch environment if GPU initialization fails.
+=======
+# crop-yield-bd
+>>>>>>> 038a5790e5f2505c52218b24bc775d611d0190c0
