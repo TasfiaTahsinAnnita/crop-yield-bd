@@ -1,5 +1,8 @@
 <?php
 declare(strict_types=1);
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    set_time_limit(360);
+}
 require_once __DIR__ . '/includes/api_client.php';
 
 $metaResult = api_request('/metadata');

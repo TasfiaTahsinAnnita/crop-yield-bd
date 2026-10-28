@@ -77,6 +77,8 @@ python -m uvicorn main:app --app-dir python_backend --host 127.0.0.1 --port 8000
 
 The service loads data, initializes the two models independently, and computes metrics at startup. Initial startup may take several minutes while packages/checkpoints load. Watch the console for each model's readiness. Open `http://127.0.0.1:8000/health` to inspect service and model status, `http://127.0.0.1:8000/metrics` for scores, and `http://127.0.0.1:8000/docs` for the local API schema.
 
+On CPU, a prediction using both models can also take several minutes. The XAMPP form allows up to six minutes for a submission and the PHP-to-API request allows up to five minutes; keep the Python backend running while the request completes.
+
 In a second PowerShell window, from this project root, start the PHP site:
 
 ```powershell

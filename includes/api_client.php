@@ -8,7 +8,7 @@ function api_request(string $path, ?array $payload = null): array {
     $options = [
         'http' => [
             'method' => $payload === null ? 'GET' : 'POST',
-            'timeout' => $payload === null ? 8 : 180,
+            'timeout' => $payload === null ? 8 : 300,
             'ignore_errors' => true,
             'header' => "Accept: application/json\r\n" . ($payload === null ? '' : "Content-Type: application/json\r\n"),
             'content' => $payload === null ? '' : json_encode($payload, JSON_THROW_ON_ERROR),
