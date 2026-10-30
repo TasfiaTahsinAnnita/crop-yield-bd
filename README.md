@@ -91,10 +91,10 @@ Open `http://127.0.0.1:8080`. For XAMPP, place this project folder under `C:\xam
 
 - `GET /health`: dataset and per-model readiness.
 - `GET /metadata`: features, dataset-derived category lists, and evaluation protocol.
-- `GET /metrics`: real RMSE, MAE, and R² for models that completed held-out predictions.
+- `GET /metrics`: real MSE, RMSE, MAE, and R² for models that completed held-out predictions.
 - `POST /predict`: independently returns valid TabFM/TabPFN predictions, with an error status for a model that fails on that request.
 
-Metrics are for one fixed holdout, not a repeated-split mean or cross-validation. Lower RMSE and MAE indicate smaller errors. R² measures improvement relative to predicting the test-set mean and can be negative.
+Metrics are for one fixed holdout, not a repeated-split mean or cross-validation. Lower MSE, RMSE, and MAE indicate smaller errors. MSE is in squared tonnes/ha; RMSE and MAE are in tonnes/ha. R² measures improvement relative to predicting the test-set mean and can be negative. ROC AUC does not apply to these continuous regression predictions.
 
 ## Troubleshooting
 

@@ -1,0 +1,35 @@
+.prediction-evaluation {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.prediction-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prediction-card .prediction-metric small {
+  font-size: 10px;
+}
+
+.prediction-card .prediction-metric strong {
+  font: 600 14px 'DM Sans', sans-serif;
+  letter-spacing: 0;
+  margin-top: 0;
+}
+
+.metric-notes {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 620px) {
+  .metric-notes {
+    grid-template-columns: 1fr;
+  }
+}

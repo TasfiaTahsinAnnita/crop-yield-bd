@@ -107,6 +107,16 @@ def _load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
     return df, x, y
 
 
+def _calculate_metrics(y_true: np.ndarray, predictions: np.ndarray) -> dict[str, float]:
+    mse = float(mean_squared_error(y_true, predictions))
+    return {
+        "MSE": mse,
+        "RMSE": float(np.sqrt(mse)),
+        "MAE": float(mean_absolute_error(y_true, predictions)),
+        "R2": float(r2_score(y_true, predictions)),
+    }
+
+
 def _fit_and_evaluate(name: str, x_train: pd.DataFrame, y_train: np.ndarray,
                       x_test: pd.DataFrame, y_test: np.ndarray) -> None:
     global train_x, train_y
@@ -140,11 +150,7 @@ def _fit_and_evaluate(name: str, x_train: pd.DataFrame, y_train: np.ndarray,
                     if len(pred) != len(y_test) or not np.isfinite(pred).all():
                         raise ValueError("Held-out predictions were invalid")
                     models[name] = model
-                    metrics[name] = {
-                        "RMSE": float(np.sqrt(mean_squared_error(y_test, pred))),
-                        "MAE": float(mean_absolute_error(y_test, pred)),
-                        "R2": float(r2_score(y_test, pred)),
-                    }
+                    metrics[name] = _calculate_metrics(y_test, pred)
                     statuses[name] = {"ready": True, "message": f"Ready ({device})"}
                     log.info("TabFM initialized on %s and evaluated on %d held-out rows", device, len(y_test))
                     return
@@ -162,11 +168,7 @@ def _fit_and_evaluate(name: str, x_train: pd.DataFrame, y_train: np.ndarray,
         if len(pred) != len(y_test) or not np.isfinite(pred).all():
             raise ValueError("Held-out predictions had an invalid shape or values")
         models[name] = model
-        metrics[name] = {
-            "RMSE": float(np.sqrt(mean_squared_error(y_test, pred))),
-            "MAE": float(mean_absolute_error(y_test, pred)),
-            "R2": float(r2_score(y_test, pred)),
-        }
+        metrics[name] = _calculate_metrics(y_test, pred)
         statuses[name] = {"ready": True, "message": "Ready"}
         log.info("%s initialized and evaluated on %d held-out rows", name, len(y_test))
     except Exception as exc:
