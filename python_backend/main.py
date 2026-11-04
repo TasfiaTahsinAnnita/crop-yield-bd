@@ -7,11 +7,13 @@ scores or predictions.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
-import io
 import os
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -26,6 +28,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("crop_yield")
+torch.set_num_interop_threads(1)
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = Path(os.getenv("CROP_YIELD_DATA", ROOT / "bangladesh_crop_yield_synthetic_1000.csv"))
@@ -57,7 +60,10 @@ statuses: dict[str, dict[str, Any]] = {
 metrics: dict[str, dict[str, float]] = {}
 metadata: dict[str, Any] = {"dataset_loaded": False}
 imputer: Any | None = None
+feature_ranges: dict[str, tuple[float, float]] = {}
+supported_crop_combinations: set[tuple[str, str, str]] = set()
 _predict_lock = threading.Lock()
+_model_load_lock = threading.Lock()
 
 
 class PredictionInput(BaseModel):
@@ -166,9 +172,31 @@ def _load_pretrained_models() -> dict[str, Any] | None:
             }
         return None
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    for name, path in MODEL_PATHS.items():
+    for name in MODEL_PATHS:
         try:
+            _load_model(name)
+        except Exception:
+            # Each model reports its own load failure; retain the other model.
+            continue
+    return model_metadata
+
+
+def _load_model(name: str) -> Any:
+    if name not in MODEL_PATHS:
+        raise ValueError(f"Unknown model: {name}")
+    if name in models:
+        return models[name]
+
+    with _model_load_lock:
+        if name in models:
+            return models[name]
+        path = MODEL_PATHS[name]
+        if not path.is_file():
+            raise FileNotFoundError(f"{name} artifact not found: {path}")
+
+        try:
+            load_started = time.perf_counter()
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             model = _load_joblib_artifact(path)
             if name == "TabPFN":
                 model_features = list(getattr(model, "feature_names_in_", []))
@@ -182,20 +210,62 @@ def _load_pretrained_models() -> dict[str, Any] | None:
                     model.executor_.dtype_byte_size,
                 )
             models[name] = model
-            statuses[name] = {"ready": True, "message": f"Ready (pretrained artifact; {device.type})"}
-            log.info("%s pretrained artifact loaded on %s", name, device.type)
+            statuses[name] = {
+                "ready": True,
+                "loaded": True,
+                "message": f"Ready (pretrained artifact; {device.type})",
+            }
+            log.info(
+                "%s pretrained artifact loaded on %s in %.2f seconds",
+                name,
+                device.type,
+                time.perf_counter() - load_started,
+            )
+            return model
         except Exception as exc:
             log.exception("%s pretrained artifact failed to load", name)
             statuses[name] = {
                 "ready": False,
+                "loaded": False,
                 "message": f"Artifact load failed: {type(exc).__name__}: {exc}",
             }
-    return model_metadata
+            raise
+
+
+def _predict_one(name: str, row: pd.DataFrame) -> dict[str, Any]:
+    try:
+        model = _load_model(name)
+        prediction_started = time.perf_counter()
+        prediction = np.asarray(model.predict(row), dtype=float).reshape(-1)
+        if len(prediction) != 1 or not np.isfinite(prediction).all():
+            raise ValueError("Model returned invalid prediction")
+        if prediction[0] < 0:
+            log.warning("%s returned a negative crop yield: %.4f", name, prediction[0])
+            return {
+                "status": "error",
+                "message": "Model returned a negative crop yield; result is invalid",
+            }
+        log.info(
+            "%s prediction completed in %.2f seconds",
+            name,
+            time.perf_counter() - prediction_started,
+        )
+        return {"prediction_tonnes_ha": float(prediction[0]), "status": "ok"}
+    except Exception as exc:
+        log.exception("%s prediction failed", name)
+        statuses[name] = {
+            "ready": False,
+            "loaded": name in models,
+            "message": f"Prediction failed: {type(exc).__name__}",
+        }
+        return {"status": "error", "message": f"Prediction failed: {type(exc).__name__}"}
 
 
 @app.on_event("startup")
 def initialize() -> None:
-    global metadata
+    global metadata, feature_ranges, supported_crop_combinations
+    feature_ranges = {}
+    supported_crop_combinations = set()
     try:
         df, x, _ = _load_data()
     except Exception as exc:
@@ -212,6 +282,15 @@ def initialize() -> None:
     categories = {column: sorted(x[column].dropna().astype(str).unique().tolist()) for column in CATEGORICAL}
     numeric_years = pd.to_numeric(x["year"], errors="coerce").dropna().unique()
     categories["year"] = sorted(int(value) for value in numeric_years)
+    feature_ranges = {
+        column: (float(x[column].min()), float(x[column].max()))
+        for column in NUMERIC
+        if x[column].notna().any()
+    }
+    supported_crop_combinations = {
+        (str(region), str(crop), str(season))
+        for region, crop, season in x[CATEGORICAL].drop_duplicates().itertuples(index=False, name=None)
+    }
     metadata = {
         "dataset_loaded": True,
         "rows": len(df),
@@ -236,8 +315,10 @@ def initialize() -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    service_ready = metadata.get("dataset_loaded") and imputer is not None and any(
-        status["ready"] for status in statuses.values()
+    service_ready = (
+        metadata.get("dataset_loaded")
+        and imputer is not None
+        and all(status["ready"] for status in statuses.values())
     )
     return {"service": "ok" if service_ready else "degraded", "dataset": metadata, "models": statuses}
 
@@ -266,6 +347,22 @@ def predict(payload: PredictionInput) -> dict[str, Any]:
         valid = categories.get(field, [])
         if submitted[field] not in valid:
             raise HTTPException(status_code=422, detail=f"{field} must be one of the dataset values")
+    warnings = []
+    for field in NUMERIC:
+        if field not in feature_ranges:
+            continue
+        minimum, maximum = feature_ranges[field]
+        if not minimum <= submitted[field] <= maximum:
+            warnings.append(
+                f"{field} is outside the training-data range ({minimum:g} to {maximum:g}); "
+                "predictions may be unreliable."
+            )
+    combination = (submitted["region"], submitted["crop"], submitted["season"])
+    if combination not in supported_crop_combinations:
+        warnings.append(
+            "This region, crop, and season combination was not represented in the training data; "
+            "the predictions are extrapolations and may be unreliable."
+        )
     row = pd.DataFrame([{column: submitted[column] for column in FEATURES}], columns=FEATURES)
     for col in CATEGORICAL:
         row[col] = row[col].astype(str)
@@ -273,18 +370,22 @@ def predict(payload: PredictionInput) -> dict[str, Any]:
         row.loc[:, NUMERIC] = imputer.transform(row[NUMERIC])
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid numeric input: {type(exc).__name__}") from exc
-    results: dict[str, Any] = {}
+    results: dict[str, Any]
     with _predict_lock:
-        for name, model in models.items():
-            try:
-                pred = np.asarray(model.predict(row), dtype=float).reshape(-1)
-                if len(pred) != 1 or not np.isfinite(pred).all():
-                    raise ValueError("Model returned invalid prediction")
-                results[name] = {"prediction_tonnes_ha": float(pred[0]), "status": "ok"}
-            except Exception as exc:
-                log.exception("%s prediction failed", name)
-                statuses[name] = {"ready": False, "message": f"Prediction failed: {type(exc).__name__}"}
-                results[name] = {"status": "error", "message": f"Prediction failed: {type(exc).__name__}"}
+        with ThreadPoolExecutor(
+            max_workers=len(MODEL_PATHS),
+            thread_name_prefix="model-predict",
+        ) as executor:
+            futures = {
+                name: executor.submit(_predict_one, name, row)
+                for name in MODEL_PATHS
+            }
+            results = {name: future.result() for name, future in futures.items()}
     if not results:
         raise HTTPException(status_code=503, detail="Neither model is currently available")
-    return {"results": results, "unit": "tonnes/ha", "synthetic": metadata.get("synthetic", True)}
+    return {
+        "results": results,
+        "unit": "tonnes/ha",
+        "synthetic": metadata.get("synthetic", True),
+        "warnings": warnings,
+    }

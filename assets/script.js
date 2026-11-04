@@ -5,7 +5,10 @@ document.addEventListener('DOMContentLoaded', () => {
   form.addEventListener('submit', () => {
     if (!form.reportValidity()) return;
     button.disabled = true;
-    button.querySelector('span:first-child').textContent = 'Models are predicting…';
-    button.insertAdjacentHTML('beforebegin', '<p class="loading-note" role="status">Running actual model inference. First requests may take a little longer.</p>');
+    button.querySelector('span:first-child').textContent = 'Both models are predicting…';
+    button.insertAdjacentHTML(
+      'beforebegin',
+      '<p class="loading-note" role="status">Running TabPFN and TabFM concurrently. CPU predictions can take several minutes.</p>',
+    );
   });
 });

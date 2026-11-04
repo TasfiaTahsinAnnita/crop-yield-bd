@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    set_time_limit(360);
+    set_time_limit(660);
 }
 require_once __DIR__ . '/includes/api_client.php';
 
@@ -68,7 +68,7 @@ function esc($value): string { return htmlspecialchars((string)$value, ENT_QUOTE
 <header class="topbar"><a class="brand" href="#top"><span class="brand-mark">✳</span> Fieldnotes <span class="brand-tag">RESEARCH</span></a><span class="top-note">TabFM <i>×</i> TabPFN</span></header>
 <main id="top" class="page">
   <section class="hero card">
-    <div class="hero-copy"><p class="eyebrow">BANGLADESH · AGRICULTURE · MACHINE LEARNING</p><h1>Bangladesh Crop Yield Prediction</h1><p class="lede">Explore two tabular foundation models with a shared set of crop, soil and seasonal inputs.</p></div>
+    <div class="hero-copy"><p class="eyebrow">BANGLADESH · AGRICULTURE · MACHINE LEARNING</p><h1>Bangladesh Crop Yield Prediction</h1><p class="lede">Compare two tabular foundation models using shared crop, soil and seasonal inputs.</p></div>
     <div class="hero-art" aria-hidden="true"><span class="sun"></span><span class="field field-one"></span><span class="field field-two"></span><span class="field field-three"></span><span class="sprout">✳</span></div>
   </section>
   <aside class="notice"><span class="notice-icon">i</span><div><strong>Synthetic prototype data</strong><p>This dataset is labeled SYNTHETIC_FOR_PROTOTYPE. Predictions and scores are software demonstrations, not validated estimates for real Bangladesh farms.</p></div></aside>
@@ -93,16 +93,16 @@ function esc($value): string { return htmlspecialchars((string)$value, ENT_QUOTE
         </label>
       <?php endforeach; ?></div></section>
     <?php endforeach; ?>
-    <div class="form-actions"><p>Predictions use the pre-trained TabFM and TabPFN artifacts.</p><button class="button" type="submit" id="submit-button"><span>Run prediction</span><span aria-hidden="true">↗</span></button></div>
+    <div class="form-actions"><p>Both models run together for every prediction.</p><button class="button" type="submit" id="submit-button"><span>Run both predictions</span><span aria-hidden="true">↗</span></button></div>
   </form>
 
-  <?php if ($prediction): ?><section class="card results" id="results"><p class="eyebrow">YOUR RESULTS</p><h2>Predicted crop yield</h2><p class="result-caption">Actual inference · tonnes per hectare</p><div class="prediction-grid">
+  <?php if ($prediction): ?><?php foreach (($prediction['warnings'] ?? []) as $warning): ?><div class="alert" role="status"><?=esc($warning)?></div><?php endforeach; ?><section class="card results" id="results"><p class="eyebrow">YOUR RESULTS</p><h2>Predicted crop yield</h2><p class="result-caption">Actual inference · tonnes per hectare</p><div class="prediction-grid">
     <?php foreach (($prediction['results'] ?? []) as $name=>$result): $modelMetrics = $metrics['models'][$name]['metrics'] ?? null; ?><article class="prediction-card"><div class="model-name"><?=esc($name)?><span class="status-dot"></span></div><?php if (($result['status'] ?? '') === 'ok'): ?><strong><?=number_format((float)$result['prediction_tonnes_ha'],2)?></strong><small>tonnes/ha</small><?php if ($modelMetrics): ?><div class="prediction-evaluation"><span class="prediction-metric"><small>MSE (held-out)</small><strong><?=number_format((float)$modelMetrics['MSE'],3)?></strong></span><span class="prediction-metric"><small>R² (held-out)</small><strong><?=number_format((float)$modelMetrics['R2'],4)?></strong></span></div><?php endif; ?><?php else: ?><p class="model-error"><?=esc($result['message'] ?? 'This model did not return a prediction.')?></p><?php endif; ?></article><?php endforeach; ?>
   </div><p class="result-footnote">These predictions use pre-trained models built from synthetic data and should not guide farm decisions.</p></section><?php endif; ?>
 
   <section class="card metrics" id="metrics"><div class="section-heading"><span class="section-dot"></span><div><p class="eyebrow">MODEL STATUS</p><h2>Model metrics</h2></div></div><p class="metrics-intro">No held-out metrics are calculated because these saved models were trained on all available rows. Scoring them on those same rows would overstate their generalization performance.</p>
     <?php if (!$metrics): ?><div class="alert">Metrics will appear when the backend has initialized. A model that fails to load will be shown as unavailable.</div><?php else: ?><div class="table-wrap"><table><thead><tr><th>Model</th><th>MSE ↓</th><th>RMSE ↓</th><th>MAE ↓</th><th>R²</th><th>Status</th></tr></thead><tbody>
-      <?php foreach (($metrics['models'] ?? []) as $name=>$entry): $modelReady = !empty($entry['status']['ready']); ?><tr><th scope="row"><?=esc($name)?></th><?php if (!empty($entry['metrics'])): ?><td><?=number_format($entry['metrics']['MSE'],3)?></td><td><?=number_format($entry['metrics']['RMSE'],3)?></td><td><?=number_format($entry['metrics']['MAE'],3)?></td><td><?=number_format($entry['metrics']['R2'],4)?></td><?php else: ?><td colspan="4" class="muted">— not reported for pre-trained artifacts</td><?php endif; ?><td><span class="<?=$modelReady ? 'ready' : 'unready'?>"><?=$modelReady ? 'Ready' : 'Unavailable'?></span></td></tr><?php endforeach; ?></tbody></table></div><?php endif; ?>
+      <?php foreach (($metrics['models'] ?? []) as $name=>$entry): $modelAvailable = !empty($entry['status']['ready']); $modelLoaded = !empty($entry['status']['loaded']); $modelStatus = $modelLoaded ? 'Ready' : 'Unavailable'; ?><tr><th scope="row"><?=esc($name)?></th><?php if (!empty($entry['metrics'])): ?><td><?=number_format($entry['metrics']['MSE'],3)?></td><td><?=number_format($entry['metrics']['RMSE'],3)?></td><td><?=number_format($entry['metrics']['MAE'],3)?></td><td><?=number_format($entry['metrics']['R2'],4)?></td><?php else: ?><td colspan="4" class="muted">— not reported for pre-trained artifacts</td><?php endif; ?><td><span class="<?=$modelAvailable ? 'ready' : 'unready'?>"><?=$modelStatus?></span></td></tr><?php endforeach; ?></tbody></table></div><?php endif; ?>
     <div class="metric-notes"><span><b>MSE</b> is the average squared error.</span><span><b>RMSE</b> penalizes larger errors more heavily.</span><span><b>MAE</b> is the average absolute error.</span><span><b>R²</b> compares the model with a test-set baseline.</span></div>
     <p class="result-footnote">The artifacts use synthetic prototype data; predictions are not evidence of real-world generalization.</p>
   </section>

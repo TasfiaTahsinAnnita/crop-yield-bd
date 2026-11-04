@@ -81,9 +81,9 @@ Start the Python API from the project root:
 python -m uvicorn main:app --app-dir python_backend --host 127.0.0.1 --port 8000
 ```
 
-The service loads the data, saved imputer, and two pre-trained estimators at startup. No models are fit or evaluated at startup. Initial startup may take several minutes because the model artifacts are large. Watch the console for each model's readiness. Open `http://127.0.0.1:8000/health` to inspect service and model status, `http://127.0.0.1:8000/metrics` for metric availability, and `http://127.0.0.1:8000/docs` for the local API schema.
+The service loads the data, saved imputer, and both model artifacts at startup. TabFM's artifact is large (about 6.6 GB on disk), so allow time and memory for both models to load before submitting predictions. No models are fit or evaluated at startup. Watch the console for model readiness. Open `http://127.0.0.1:8000/health` to inspect service and model status, `http://127.0.0.1:8000/metrics` for metric availability, and `http://127.0.0.1:8000/docs` for the local API schema.
 
-On CPU, a prediction using both models can also take several minutes. The XAMPP form allows up to six minutes for a submission and the PHP-to-API request allows up to five minutes; keep the Python backend running while the request completes.
+Each submission runs TabPFN and TabFM concurrently; model selection is not part of the form or API. Both artifacts stay loaded between requests to avoid adding artifact-load time to predictions. Numeric inputs outside training-data ranges and unobserved region/crop/season combinations are still sent to the models, but the result includes a warning that it is an extrapolation and may be unreliable. Category values and years must still exist in the dataset, and physical input constraints still apply. Negative model outputs are reported as invalid, not shown as yields. On CPU, PyTorch uses one inter-op thread to limit nested parallel scheduling while the two prediction calls run concurrently. Both models together need more memory and CPU, and CPU inference may still take several minutes. The XAMPP form and PHP-to-API request allow up to ten minutes; keep the Python backend running while the request completes.
 
 In a second PowerShell window, from this project root, start the PHP site:
 
@@ -98,7 +98,7 @@ Open `http://127.0.0.1:8080`. For XAMPP, place this project folder under `C:\xam
 - `GET /health`: dataset and per-model readiness.
 - `GET /metadata`: features, dataset-derived category lists, and evaluation protocol.
 - `GET /metrics`: reports that held-out metrics are unavailable for the supplied full-data pre-trained artifacts.
-- `POST /predict`: independently returns valid TabFM/TabPFN predictions, with an error status for a model that fails on that request.
+- `POST /predict`: accepts the prediction input fields and returns results from both TabPFN and TabFM, running concurrently. A `model` field is not accepted.
 
 Held-out metrics are intentionally not calculated: the supplied estimators were trained on all rows in the source dataset, so scoring them on a split of those same rows would be misleading. For an unbiased evaluation, provide separately held-out data and evaluate it independently. ROC AUC does not apply to these continuous regression predictions.
 
@@ -110,7 +110,7 @@ Held-out metrics are intentionally not calculated: the supplied estimators were 
 - **Saved preprocessing fails:** install the pinned dependencies from `python_backend\requirements.txt`, especially scikit-learn 1.6.1.
 - **PHP reports the service is not responding:** start the API on `127.0.0.1:8000`; check Windows Firewall and the PHP `allow_url_fopen` setting.
 - **CUDA out-of-memory:** start with a CPU-only PyTorch environment or reduce other GPU workloads. The current implementation chooses CUDA when PyTorch reports it available; see the limitation below.
-- **A model is unavailable:** the site can still show the other model's actual result.
+- **A model is unavailable:** check the model's status on `/health` and the API terminal for its load or prediction error. Any successfully completed model result is still returned.
 
 ## Current verification and limitations
 
