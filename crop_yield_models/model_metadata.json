@@ -1,0 +1,43 @@
+{
+    "target": "crop_yield_tonnes_ha",
+    "feature_columns": [
+        "region",
+        "year",
+        "crop",
+        "season",
+        "rainfall_mm_season",
+        "avg_temperature_c",
+        "relative_humidity_pct",
+        "soil_ph",
+        "soil_moisture_m3_m3",
+        "solar_radiation_mj_m2_day",
+        "ndvi",
+        "fertilizer_kg_ha",
+        "irrigation_used_0_no_1_yes",
+        "previous_season_yield_tonnes_ha"
+    ],
+    "numeric_columns": [
+        "year",
+        "rainfall_mm_season",
+        "avg_temperature_c",
+        "relative_humidity_pct",
+        "soil_ph",
+        "soil_moisture_m3_m3",
+        "solar_radiation_mj_m2_day",
+        "ndvi",
+        "fertilizer_kg_ha",
+        "irrigation_used_0_no_1_yes",
+        "previous_season_yield_tonnes_ha"
+    ],
+    "categorical_columns": [
+        "region",
+        "crop",
+        "season"
+    ],
+    "training_rows": 1000,
+    "dataset": "bangladesh_crop_yield_synthetic_1000.csv",
+    "data_status": [
+        "SYNTHETIC_FOR_PROTOTYPE"
+    ],
+    "training_note": "Final deployment models trained on all available rows. Synthetic prototype data; not real-world validation."
+}

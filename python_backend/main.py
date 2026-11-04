@@ -1,32 +1,41 @@
 """FastAPI service for the Bangladesh crop-yield research prototype.
 
-Models and metrics are computed from the supplied CSV at startup. A model that
-cannot initialize is marked unavailable; this service never fills in fake scores
-or predictions.
+Pretrained model artifacts are loaded at startup and used for inference. A model
+that cannot initialize is marked unavailable; this service never fills in fake
+scores or predictions.
 """
 
 from __future__ import annotations
 
-import os
+import json
 import logging
+import io
+import os
 import threading
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+import joblib
 import numpy as np
 import pandas as pd
 import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("crop_yield")
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = Path(os.getenv("CROP_YIELD_DATA", ROOT / "bangladesh_crop_yield_synthetic_1000.csv"))
+MODEL_DIR = Path(os.getenv("CROP_YIELD_MODELS", ROOT / "crop_yield_models"))
+MODEL_METADATA_PATH = MODEL_DIR / "model_metadata.json"
+NUMERIC_IMPUTER_PATH = MODEL_DIR / "numeric_imputer.joblib"
+MODEL_PATHS = {
+    "TabFM": MODEL_DIR / "tabfm_final.joblib",
+    "TabPFN": MODEL_DIR / "tabpfn_final.joblib",
+}
 TARGET = "crop_yield_tonnes_ha"
 METADATA = ["record_id", "country", "data_status"]
 FEATURES = [
@@ -47,9 +56,7 @@ statuses: dict[str, dict[str, Any]] = {
 }
 metrics: dict[str, dict[str, float]] = {}
 metadata: dict[str, Any] = {"dataset_loaded": False}
-train_x: pd.DataFrame | None = None
-train_y: np.ndarray | None = None
-imputer: SimpleImputer | None = None
+imputer: Any | None = None
 _predict_lock = threading.Lock()
 
 
@@ -107,79 +114,92 @@ def _load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
     return df, x, y
 
 
-def _fit_and_evaluate(name: str, x_train: pd.DataFrame, y_train: np.ndarray,
-                      x_test: pd.DataFrame, y_test: np.ndarray) -> None:
-    global train_x, train_y
-    try:
-        if name == "TabFM":
-            try:
-                from tabfm import TabFMRegressor, tabfm_v1_0_0_pytorch as backend
-            except ImportError:
-                # Compatibility with the import paths used in the notebook.
-                from tabfm.src.classifier_and_regressor import TabFMRegressor
-                from tabfm.src.pytorch import tabfm_v1_0_0 as backend
-            # Mirror the notebook's GPU/FP16 attempt, then retry on CPU/FP32
-            # if initialization or held-out inference fails.
-            devices = ["cuda", "cpu"] if torch.cuda.is_available() else ["cpu"]
-            last_error: Exception | None = None
-            for device in devices:
-                try:
-                    base = backend.load(
-                        model_type="regression", device=device,
-                        dtype=torch.float16 if device == "cuda" else torch.float32,
-                    )
-                    model = TabFMRegressor(
-                        model=base,
-                        max_num_rows=min(100, len(x_train)),
-                        max_num_features=min(500, x_train.shape[1]),
-                    )
-                    # Preserve this model's own context for later predictions.
-                    train_x, train_y = x_train, y_train
-                    model.fit(x_train, y_train)
-                    pred = np.asarray(model.predict(x_test), dtype=float).reshape(-1)
-                    if len(pred) != len(y_test) or not np.isfinite(pred).all():
-                        raise ValueError("Held-out predictions were invalid")
-                    models[name] = model
-                    metrics[name] = {
-                        "RMSE": float(np.sqrt(mean_squared_error(y_test, pred))),
-                        "MAE": float(mean_absolute_error(y_test, pred)),
-                        "R2": float(r2_score(y_test, pred)),
-                    }
-                    statuses[name] = {"ready": True, "message": f"Ready ({device})"}
-                    log.info("TabFM initialized on %s and evaluated on %d held-out rows", device, len(y_test))
-                    return
-                except Exception as exc:
-                    last_error = exc
-                    log.exception("TabFM %s initialization/evaluation failed", device)
-            raise RuntimeError(f"TabFM failed on all available devices: {last_error}")
-        else:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            from tabpfn import TabPFNRegressor
-            model = TabPFNRegressor(device=device)
-            model.fit(x_train, y_train)
+def _calculate_metrics(y_true: np.ndarray, predictions: np.ndarray) -> dict[str, float]:
+    mse = float(mean_squared_error(y_true, predictions))
+    return {
+        "MSE": mse,
+        "RMSE": float(np.sqrt(mse)),
+        "MAE": float(mean_absolute_error(y_true, predictions)),
+        "R2": float(r2_score(y_true, predictions)),
+    }
 
-        pred = np.asarray(model.predict(x_test), dtype=float).reshape(-1)
-        if len(pred) != len(y_test) or not np.isfinite(pred).all():
-            raise ValueError("Held-out predictions had an invalid shape or values")
-        models[name] = model
-        metrics[name] = {
-            "RMSE": float(np.sqrt(mean_squared_error(y_test, pred))),
-            "MAE": float(mean_absolute_error(y_test, pred)),
-            "R2": float(r2_score(y_test, pred)),
-        }
-        statuses[name] = {"ready": True, "message": "Ready"}
-        log.info("%s initialized and evaluated on %d held-out rows", name, len(y_test))
+
+def _load_joblib_artifact(path: Path) -> Any:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def load_torch_storage(data: bytes) -> Any:
+        return torch.load(io.BytesIO(data), map_location=device, weights_only=False)
+
+    # The serialized estimators contain PyTorch storages saved on their training
+    # GPU; remap them so the same artifacts can load on CPU-only machines.
+    with patch("torch.storage._load_from_bytes", load_torch_storage):
+        return joblib.load(path)
+
+
+def _load_pretrained_models() -> dict[str, Any] | None:
+    global imputer
+    models.clear()
+    metrics.clear()
+    imputer = None
+
+    try:
+        with MODEL_METADATA_PATH.open(encoding="utf-8") as file:
+            model_metadata = json.load(file)
+        if model_metadata.get("target") != TARGET:
+            raise ValueError("Model metadata target does not match the API target")
+        if model_metadata.get("feature_columns") != FEATURES:
+            raise ValueError("Model metadata feature columns do not match the API schema")
+        if model_metadata.get("numeric_columns") != NUMERIC:
+            raise ValueError("Model metadata numeric columns do not match the API schema")
+        if model_metadata.get("categorical_columns") != CATEGORICAL:
+            raise ValueError("Model metadata categorical columns do not match the API schema")
+
+        imputer = _load_joblib_artifact(NUMERIC_IMPUTER_PATH)
+        imputer_columns = list(getattr(imputer, "feature_names_in_", []))
+        if imputer_columns != NUMERIC:
+            raise ValueError("Saved numeric imputer columns do not match the API schema")
     except Exception as exc:
-        # Keep details in the server log; status contains a concise message.
-        log.exception("%s initialization failed", name)
-        statuses[name] = {"ready": False, "message": f"Initialization failed: {type(exc).__name__}: {exc}"}
+        log.exception("Pretrained model preprocessing initialization failed")
+        imputer = None
+        for name in statuses:
+            statuses[name] = {
+                "ready": False,
+                "message": f"Preprocessing unavailable: {type(exc).__name__}: {exc}",
+            }
+        return None
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    for name, path in MODEL_PATHS.items():
+        try:
+            model = _load_joblib_artifact(path)
+            if name == "TabPFN":
+                model_features = list(getattr(model, "feature_names_in_", []))
+                if model_features != FEATURES:
+                    raise ValueError("Saved TabPFN feature columns do not match the API schema")
+                model.device = str(device)
+                model.devices_ = (device,)
+                model.executor_.to(
+                    model.devices_,
+                    model.forced_inference_dtype_,
+                    model.executor_.dtype_byte_size,
+                )
+            models[name] = model
+            statuses[name] = {"ready": True, "message": f"Ready (pretrained artifact; {device.type})"}
+            log.info("%s pretrained artifact loaded on %s", name, device.type)
+        except Exception as exc:
+            log.exception("%s pretrained artifact failed to load", name)
+            statuses[name] = {
+                "ready": False,
+                "message": f"Artifact load failed: {type(exc).__name__}: {exc}",
+            }
+    return model_metadata
 
 
 @app.on_event("startup")
 def initialize() -> None:
-    global imputer, metadata, train_x, train_y
+    global metadata
     try:
-        df, x, y = _load_data()
+        df, x, _ = _load_data()
     except Exception as exc:
         log.exception("Dataset initialization failed")
         metadata = {"dataset_loaded": False, "error": str(exc)}
@@ -202,27 +222,26 @@ def initialize() -> None:
         "categories": categories,
         "synthetic": bool(is_synthetic),
         "data_status": sorted(df["data_status"].astype(str).unique().tolist()) if "data_status" in df else [],
-        "evaluation": {"protocol": "single 80/20 random holdout", "test_size": 0.2, "random_state": 42},
+        "evaluation": {
+            "protocol": "Pretrained artifacts; no held-out evaluation performed",
+            "metrics_available": False,
+        },
     }
-    idx_train, idx_test = train_test_split(np.arange(len(x)), test_size=0.2, random_state=42)
-    x_train, x_test = x.iloc[idx_train].copy(), x.iloc[idx_test].copy()
-    y_train, y_test = y.iloc[idx_train].to_numpy(dtype=np.float32), y.iloc[idx_test].to_numpy(dtype=float)
-    imputer = SimpleImputer(strategy="median")
-    x_train.loc[:, NUMERIC] = imputer.fit_transform(x_train[NUMERIC])
-    x_test.loc[:, NUMERIC] = imputer.transform(x_test[NUMERIC])
-    for col in CATEGORICAL:
-        x_train[col] = x_train[col].fillna("Unknown").astype(str)
-        x_test[col] = x_test[col].fillna("Unknown").astype(str)
-
-    # The models initialize independently, so one missing package/license does
-    # not suppress the other model's genuine results.
-    _fit_and_evaluate("TabFM", x_train, y_train, x_test, y_test)
-    _fit_and_evaluate("TabPFN", x_train, y_train, x_test, y_test)
+    model_metadata = _load_pretrained_models()
+    if model_metadata is not None:
+        metadata["model_artifacts"] = {
+            "training_rows": model_metadata.get("training_rows"),
+            "dataset": model_metadata.get("dataset"),
+            "training_note": model_metadata.get("training_note"),
+        }
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"service": "ok" if metadata.get("dataset_loaded") else "degraded", "dataset": metadata, "models": statuses}
+    service_ready = metadata.get("dataset_loaded") and imputer is not None and any(
+        status["ready"] for status in statuses.values()
+    )
+    return {"service": "ok" if service_ready else "degraded", "dataset": metadata, "models": statuses}
 
 
 @app.get("/metadata")
@@ -242,7 +261,7 @@ def get_metrics() -> dict[str, Any]:
 @app.post("/predict")
 def predict(payload: PredictionInput) -> dict[str, Any]:
     if not metadata.get("dataset_loaded") or imputer is None:
-        raise HTTPException(status_code=503, detail="Prediction service is not ready: dataset could not be loaded")
+        raise HTTPException(status_code=503, detail="Prediction service is not ready: dataset or saved preprocessing is unavailable")
     submitted = payload.model_dump()
     categories = metadata["categories"]
     for field in CATEGORICAL + ["year"]:
@@ -260,38 +279,14 @@ def predict(payload: PredictionInput) -> dict[str, Any]:
     with _predict_lock:
         for name, model in models.items():
             try:
-                # Both model contexts were established once at service startup.
                 pred = np.asarray(model.predict(row), dtype=float).reshape(-1)
                 if len(pred) != 1 or not np.isfinite(pred).all():
                     raise ValueError("Model returned invalid prediction")
                 results[name] = {"prediction_tonnes_ha": float(pred[0]), "status": "ok"}
             except Exception as exc:
                 log.exception("%s prediction failed", name)
-                if name == "TabFM" and torch.cuda.is_available():
-                    try:
-                        try:
-                            from tabfm import TabFMRegressor, tabfm_v1_0_0_pytorch as backend
-                        except ImportError:
-                            from tabfm.src.classifier_and_regressor import TabFMRegressor
-                            from tabfm.src.pytorch import tabfm_v1_0_0 as backend
-                        base = backend.load(model_type="regression", device="cpu", dtype=torch.float32)
-                        cpu_model = TabFMRegressor(
-                            model=base, max_num_rows=min(100, len(train_x)),
-                            max_num_features=min(500, train_x.shape[1]),
-                        )
-                        cpu_model.fit(train_x, train_y)
-                        cpu_pred = np.asarray(cpu_model.predict(row), dtype=float).reshape(-1)
-                        if len(cpu_pred) != 1 or not np.isfinite(cpu_pred).all():
-                            raise ValueError("CPU fallback returned invalid prediction")
-                        models[name] = cpu_model
-                        statuses[name] = {"ready": True, "message": "Ready (CPU fallback)"}
-                        results[name] = {"prediction_tonnes_ha": float(cpu_pred[0]), "status": "ok", "device": "cpu"}
-                        continue
-                    except Exception as cpu_exc:
-                        log.exception("TabFM CPU prediction fallback failed")
-                        results[name] = {"status": "error", "message": f"Prediction failed on GPU and CPU ({type(cpu_exc).__name__})"}
-                else:
-                    results[name] = {"status": "error", "message": f"Prediction failed: {type(exc).__name__}"}
+                statuses[name] = {"ready": False, "message": f"Prediction failed: {type(exc).__name__}"}
+                results[name] = {"status": "error", "message": f"Prediction failed: {type(exc).__name__}"}
     if not results:
         raise HTTPException(status_code=503, detail="Neither model is currently available")
     return {"results": results, "unit": "tonnes/ha", "synthetic": metadata.get("synthetic", True)}

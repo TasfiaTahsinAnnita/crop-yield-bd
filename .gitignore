@@ -11,3 +11,5 @@ model_cache/
 *.pth
 *.ckpt
 *.safetensors
+crop_yield_models/tabfm_final.joblib
+crop_yield_models/tabpfn_final.joblib

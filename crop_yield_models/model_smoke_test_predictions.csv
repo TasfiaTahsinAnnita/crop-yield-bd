@@ -1,0 +1,6 @@
+region,year,crop,season,rainfall_mm_season,avg_temperature_c,relative_humidity_pct,soil_ph,soil_moisture_m3_m3,solar_radiation_mj_m2_day,ndvi,fertilizer_kg_ha,irrigation_used_0_no_1_yes,previous_season_yield_tonnes_ha,actual_yield_tonnes_ha,tabfm_prediction,tabpfn_prediction
+Sylhet,2022,Jute,Kharif,792.0,26.1,61.2,6.98,0.117,19.18,0.689,107.6,1,2.42,2.31,2.6121912002563477,2.385804484932578
+Rangpur,2020,Maize,Rabi,1515.1,26.5,75.9,5.77,0.348,13.85,0.95,83.0,0,5.18,6.21,5.943208694458008,6.374009625518283
+Dinajpur,2024,Jute,Kharif,1631.5,26.0,90.4,6.61,0.579,18.65,0.712,131.4,0,2.28,3.59,2.6763219833374023,3.479808189399364
+Dhaka,2025,Wheat,Rabi,1303.3,21.8,75.9,5.74,0.289,14.96,0.79,102.9,1,3.4,2.2,3.2683229446411133,2.3891202778182787
+Sylhet,2021,Rice,Boro,250.0,23.9,68.1,4.91,0.289,16.03,0.574,156.9,1,4.3,3.91,4.281744956970215,3.8715802473021768
