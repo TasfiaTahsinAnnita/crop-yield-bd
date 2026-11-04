@@ -122,9 +122,6 @@ def _calculate_metrics(y_true: np.ndarray, predictions: np.ndarray) -> dict[str,
         "MAE": float(mean_absolute_error(y_true, predictions)),
         "R2": float(r2_score(y_true, predictions)),
     }
-<<<<<<< HEAD
-
-
 def _load_joblib_artifact(path: Path) -> Any:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -159,64 +156,6 @@ def _load_pretrained_models() -> dict[str, Any] | None:
         imputer_columns = list(getattr(imputer, "feature_names_in_", []))
         if imputer_columns != NUMERIC:
             raise ValueError("Saved numeric imputer columns do not match the API schema")
-=======
-
-
-def _fit_and_evaluate(name: str, x_train: pd.DataFrame, y_train: np.ndarray,
-                      x_test: pd.DataFrame, y_test: np.ndarray) -> None:
-    global train_x, train_y
-    try:
-        if name == "TabFM":
-            try:
-                from tabfm import TabFMRegressor, tabfm_v1_0_0_pytorch as backend
-            except ImportError:
-                # Compatibility with the import paths used in the notebook.
-                from tabfm.src.classifier_and_regressor import TabFMRegressor
-                from tabfm.src.pytorch import tabfm_v1_0_0 as backend
-            # Mirror the notebook's GPU/FP16 attempt, then retry on CPU/FP32
-            # if initialization or held-out inference fails.
-            devices = ["cuda", "cpu"] if torch.cuda.is_available() else ["cpu"]
-            last_error: Exception | None = None
-            for device in devices:
-                try:
-                    base = backend.load(
-                        model_type="regression", device=device,
-                        dtype=torch.float16 if device == "cuda" else torch.float32,
-                    )
-                    model = TabFMRegressor(
-                        model=base,
-                        max_num_rows=min(100, len(x_train)),
-                        max_num_features=min(500, x_train.shape[1]),
-                    )
-                    # Preserve this model's own context for later predictions.
-                    train_x, train_y = x_train, y_train
-                    model.fit(x_train, y_train)
-                    pred = np.asarray(model.predict(x_test), dtype=float).reshape(-1)
-                    if len(pred) != len(y_test) or not np.isfinite(pred).all():
-                        raise ValueError("Held-out predictions were invalid")
-                    models[name] = model
-                    metrics[name] = _calculate_metrics(y_test, pred)
-                    statuses[name] = {"ready": True, "message": f"Ready ({device})"}
-                    log.info("TabFM initialized on %s and evaluated on %d held-out rows", device, len(y_test))
-                    return
-                except Exception as exc:
-                    last_error = exc
-                    log.exception("TabFM %s initialization/evaluation failed", device)
-            raise RuntimeError(f"TabFM failed on all available devices: {last_error}")
-        else:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            from tabpfn import TabPFNRegressor
-            model = TabPFNRegressor(device=device)
-            model.fit(x_train, y_train)
-
-        pred = np.asarray(model.predict(x_test), dtype=float).reshape(-1)
-        if len(pred) != len(y_test) or not np.isfinite(pred).all():
-            raise ValueError("Held-out predictions had an invalid shape or values")
-        models[name] = model
-        metrics[name] = _calculate_metrics(y_test, pred)
-        statuses[name] = {"ready": True, "message": "Ready"}
-        log.info("%s initialized and evaluated on %d held-out rows", name, len(y_test))
->>>>>>> 58e413445a04eec7ebf6c0e9869948391e08f0c9
     except Exception as exc:
         log.exception("Pretrained model preprocessing initialization failed")
         imputer = None
