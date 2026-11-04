@@ -97,10 +97,17 @@ Open `http://127.0.0.1:8080`. For XAMPP, place this project folder under `C:\xam
 
 - `GET /health`: dataset and per-model readiness.
 - `GET /metadata`: features, dataset-derived category lists, and evaluation protocol.
+<<<<<<< HEAD
 - `GET /metrics`: reports that held-out metrics are unavailable for the supplied full-data pre-trained artifacts.
 - `POST /predict`: independently returns valid TabFM/TabPFN predictions, with an error status for a model that fails on that request.
 
 Held-out metrics are intentionally not calculated: the supplied estimators were trained on all rows in the source dataset, so scoring them on a split of those same rows would be misleading. For an unbiased evaluation, provide separately held-out data and evaluate it independently. ROC AUC does not apply to these continuous regression predictions.
+=======
+- `GET /metrics`: real MSE, RMSE, MAE, and R² for models that completed held-out predictions.
+- `POST /predict`: independently returns valid TabFM/TabPFN predictions, with an error status for a model that fails on that request.
+
+Metrics are for one fixed holdout, not a repeated-split mean or cross-validation. Lower MSE, RMSE, and MAE indicate smaller errors. MSE is in squared tonnes/ha; RMSE and MAE are in tonnes/ha. R² measures improvement relative to predicting the test-set mean and can be negative. ROC AUC does not apply to these continuous regression predictions.
+>>>>>>> 58e413445a04eec7ebf6c0e9869948391e08f0c9
 
 ## Troubleshooting
 
